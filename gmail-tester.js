@@ -1,5 +1,6 @@
 const gmail = require("./gmail");
-const tokenStore = require("./token-store")
+const tokenStore = require("./token-store");
+const { google } = require("googleapis");
 
 function _get_header(name, headers) {
   const found = headers.find(h => h.name === name);
@@ -46,7 +47,8 @@ async function _get_recent_email(credentials, token, options = {}) {
       from: _get_header("From", gmail_email.payload.headers),
       subject: _get_header("Subject", gmail_email.payload.headers),
       receiver: _get_header("Delivered-To", gmail_email.payload.headers),
-      date: new Date(+gmail_email["internalDate"])
+      date: new Date(+gmail_email["internalDate"]),
+      threadId: gmail_email.threadId
     };
     if (options.include_body) {
       let email_body = {
@@ -89,7 +91,10 @@ async function _get_recent_email(credentials, token, options = {}) {
     }
 
     if (options.include_attachments) {
-      email.attachments = await gmail.get_email_attachments(oAuth2Client, gmail_email);
+      email.attachments = await gmail.get_email_attachments(
+        oAuth2Client,
+        gmail_email
+      );
     }
     emails.push(email);
   }
@@ -105,11 +110,7 @@ async function __check_inbox(credentials, token, options = {}) {
     let found_emails = null;
     let done_waiting_time = 0;
     do {
-      const emails = await _get_recent_email(
-        credentials,
-        token,
-        options
-      );
+      const emails = await _get_recent_email(credentials, token, options);
       if (emails.length > 0) {
         console.log(`[gmail] Found!`);
         found_emails = emails;
@@ -223,8 +224,94 @@ async function refresh_access_token(credentials, token) {
   }
 }
 
+/**
+ * Replies to the most recent email that matches the given criteria.
+ *
+ * @param {string | Object} credentials - Path to credentials json file or credentials object.
+ * @param {string | Object} token - Path to token json file or token object.
+ * @param {Object} options - Filtering options similar to check_inbox.
+ * @param {string} options.subject - Filter on the subject of the email.
+ * @param {string} [options.from] - Filter on the email address of the sender.
+ * @param {string} [options.to] - Filter on the email address of the receiver.
+ * @param {Date} [options.before] - Filter messages received before this date.
+ * @param {Date} [options.after] - Filter messages received after this date.
+ * @param {number} [options.wait_time_sec=30] - Interval between inbox checks (in seconds).
+ * @param {number} [options.max_wait_time_sec=60] - Maximum wait time (in seconds).
+ * @param {string} [options.label="INBOX"] - Gmail label to search in.
+ * @param {string} replyContent - The content of your reply.
+ * @returns {Promise<Object>} The response from the Gmail API after sending the reply.
+ */
+async function reply_to_email(credentials, token, replyContent, options = {}) {
+  // Use _get_recent_email to find matching emails.
+  // This returns an array of flattened email objects.
+  const emails = await _get_recent_email(credentials, token, options);
+  if (!emails || emails.length === 0) {
+    throw new Error("No email found matching the provided criteria.");
+  }
+
+  // Choose the first email that was found.
+  const originalEmail = emails[0];
+
+  // Extract properties from the flattened email object.
+  const originalFrom = originalEmail.from;
+  const originalSubject = originalEmail.subject;
+  const threadId = originalEmail.threadId;
+  // Optionally, if your _get_recent_email can return the original message ID, use it:
+  const originalMessageId = originalEmail.messageId || "";
+
+  if (!originalFrom || !originalSubject || !threadId) {
+    throw new Error("Missing required information from the original email.");
+  }
+
+  // Prepare the reply subject.
+  let replySubject = originalSubject;
+  if (!/^Re:/i.test(replySubject)) {
+    replySubject = "Re: " + replySubject;
+  }
+
+  // Construct the RFC 2822 formatted reply message.
+  // "From: me" tells Gmail to use the authenticated user's address.
+  const messageLines = [
+    `From: me`,
+    `To: ${originalFrom}`,
+    `Subject: ${replySubject}`
+  ];
+
+  // If a message ID is available, include threading headers.
+  if (originalMessageId) {
+    messageLines.push(`In-Reply-To: ${originalMessageId}`);
+    messageLines.push(`References: ${originalMessageId}`);
+  }
+
+  messageLines.push("", replyContent);
+  const replyMessage = messageLines.join("\n");
+
+  // Encode the message in base64url format.
+  const encodedMessage = Buffer.from(replyMessage)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  // Authorize and create a Gmail client.
+  const oAuth2Client = await require("./gmail").authorize(credentials, token);
+  const gmailClient = google.gmail({ version: "v1", auth: oAuth2Client });
+
+  // Send the reply using the original email's threadId.
+  const response = await gmailClient.users.messages.send({
+    userId: "me",
+    resource: {
+      raw: encodedMessage,
+      threadId: threadId
+    }
+  });
+
+  return response.data;
+}
+
 module.exports = {
   check_inbox,
   get_messages,
-  refresh_access_token
+  refresh_access_token,
+  reply_to_email
 };
