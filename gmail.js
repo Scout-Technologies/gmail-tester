@@ -5,7 +5,10 @@ const fs = require("fs");
 const { authenticate } = require("./libs/oauth2");
 
 // If modifying these scopes, delete token.json.
-const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
+const SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send",
+];
 
 /**
  * Create an OAuth2 client with the given credentials, and then execute the
