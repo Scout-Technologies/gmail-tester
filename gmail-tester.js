@@ -48,7 +48,11 @@ async function _get_recent_email(credentials, token, options = {}) {
       subject: _get_header("Subject", gmail_email.payload.headers),
       receiver: _get_header("Delivered-To", gmail_email.payload.headers),
       date: new Date(+gmail_email["internalDate"]),
-      threadId: gmail_email.threadId
+      threadId: gmail_email.threadId,
+      // Check for both Message-ID and Message-Id formats
+      messageId:
+        _get_header("Message-ID", gmail_email.payload.headers) ||
+        _get_header("Message-Id", gmail_email.payload.headers)
     };
     if (options.include_body) {
       let email_body = {
@@ -256,11 +260,20 @@ async function reply_to_email(credentials, token, replyContent, options = {}) {
   const originalFrom = originalEmail.from;
   const originalSubject = originalEmail.subject;
   const threadId = originalEmail.threadId;
-  // Optionally, if your _get_recent_email can return the original message ID, use it:
+  // Get the original message ID for threading
   const originalMessageId = originalEmail.messageId || "";
 
   if (!originalFrom || !originalSubject || !threadId) {
     throw new Error("Missing required information from the original email.");
+  }
+
+  // Log whether we found a message ID for debugging
+  if (originalMessageId) {
+    console.log(`[gmail-tester] Found original Message-ID: ${originalMessageId}`);
+  } else {
+    console.log(
+      "[gmail-tester] Warning: No Message-ID found in the original email"
+    );
   }
 
   // Prepare the reply subject.
@@ -279,8 +292,15 @@ async function reply_to_email(credentials, token, replyContent, options = {}) {
 
   // If a message ID is available, include threading headers.
   if (originalMessageId) {
+    console.log(
+      `[gmail-tester] Adding threading headers with Message-ID: ${originalMessageId}`
+    );
     messageLines.push(`In-Reply-To: ${originalMessageId}`);
     messageLines.push(`References: ${originalMessageId}`);
+  } else {
+    console.log(
+      "[gmail-tester] Skipping threading headers due to missing Message-ID"
+    );
   }
 
   messageLines.push("", replyContent);
